@@ -20,6 +20,9 @@
 ## Лабораторная 4
 - Код: [lab4/lab4.py](./lab4/lab4.py)
 - Сцены: [lab4/scenes.py](./lab4/scenes.py)
+- README: [lab4/README.md](./lab4/README.md)
+- Отчет DOCX: [lab4/лаб4мои.docx](./lab4/лаб4мои.docx)
+- Отчет PDF: [lab4/лаб4мои.pdf](./lab4/лаб4мои.pdf)
 
 ## Лабораторная 5
 - Код: [lab4-5/lab4_5.py](./lab4-5/lab4_5.py)
