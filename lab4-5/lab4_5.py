@@ -725,16 +725,21 @@ def render_buffers(
     normal = [[Vec3(0.0, 0.0, 1.0) for _ in range(width)] for _ in range(height)]
     object_id = [[-1 for _ in range(width)] for _ in range(height)]
     start = time.time()
+    tile_size = max(1, tile_size)
+    tiles = [
+        (x, y, min(width, x + tile_size), min(height, y + tile_size))
+        for y in range(0, height, tile_size)
+        for x in range(0, width, tile_size)
+    ]
+    total_tiles = len(tiles)
 
     if workers > 1:
-        completed_rows = 0
-        chunk_size = max(1, min(tile_size, height))
-        chunks = [(y, min(height, y + chunk_size)) for y in range(0, height, chunk_size)]
+        completed_tiles = 0
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(
-                    render_buffer_row_range,
+                    render_buffer_tile,
                     scene,
                     camera,
                     width,
@@ -743,66 +748,73 @@ def render_buffers(
                     max_depth,
                     light_samples,
                     seed,
+                    x_start,
                     y_start,
+                    x_end,
                     y_end,
                 )
-                for y_start, y_end in chunks
+                for x_start, y_start, x_end, y_end in tiles
             ]
 
             for future in as_completed(futures):
-                y_start, direct_rows, secondary_rows, total_rows, depth_rows, normal_rows, object_id_rows = future.result()
+                x_start, y_start, direct_rows, secondary_rows, total_rows, depth_rows, normal_rows, object_id_rows = future.result()
                 for offset in range(len(total_rows)):
                     row_index = y_start + offset
-                    direct[row_index] = direct_rows[offset]
-                    secondary[row_index] = secondary_rows[offset]
-                    total[row_index] = total_rows[offset]
-                    depth[row_index] = depth_rows[offset]
-                    normal[row_index] = normal_rows[offset]
-                    object_id[row_index] = object_id_rows[offset]
+                    x_end = x_start + len(total_rows[offset])
+                    direct[row_index][x_start:x_end] = direct_rows[offset]
+                    secondary[row_index][x_start:x_end] = secondary_rows[offset]
+                    total[row_index][x_start:x_end] = total_rows[offset]
+                    depth[row_index][x_start:x_end] = depth_rows[offset]
+                    normal[row_index][x_start:x_end] = normal_rows[offset]
+                    object_id[row_index][x_start:x_end] = object_id_rows[offset]
 
-                completed_rows += len(total_rows)
+                completed_tiles += 1
                 if chunk_callback is not None:
-                    chunk_callback(y_start, total_rows)
+                    chunk_callback(x_start, y_start, total_rows)
 
                 elapsed = time.time() - start
-                print(f"Rendered buffers {completed_rows}/{height} rows in {elapsed:.1f} s")
+                print(f"Rendered buffers {completed_tiles}/{total_tiles} tiles in {elapsed:.1f} s")
                 if progress_callback is not None:
-                    progress_callback(completed_rows, height, elapsed)
+                    progress_callback(completed_tiles, total_tiles, elapsed)
 
         return RenderBuffers(direct, secondary, total, depth, normal, object_id)
 
-    for y in range(height):
-        for x in range(width):
-            rng = random.Random(seed + y * width + x)
-            direct_sum = BLACK
-            secondary_sum = BLACK
-            center_ray = camera.generate_ray((x + 0.5) / width, (y + 0.5) / height)
-            depth[y][x], normal[y][x], object_id[y][x] = first_hit_buffers(center_ray, scene)
-
-            for _ in range(samples_per_pixel):
-                u = (x + rng.random()) / width
-                v = (y + rng.random()) / height
-                d, s = trace_ray_components(camera.generate_ray(u, v), scene, rng, max_depth, light_samples)
-                direct_sum += d
-                secondary_sum += s
-
-            direct[y][x] = direct_sum / samples_per_pixel
-            secondary[y][x] = secondary_sum / samples_per_pixel
-            total[y][x] = direct[y][x] + secondary[y][x]
-
+    for completed_tiles, (x_start, y_start, x_end, y_end) in enumerate(tiles, start=1):
+        _, _, direct_rows, secondary_rows, total_rows, depth_rows, normal_rows, object_id_rows = render_buffer_tile(
+            scene,
+            camera,
+            width,
+            height,
+            samples_per_pixel,
+            max_depth,
+            light_samples,
+            seed,
+            x_start,
+            y_start,
+            x_end,
+            y_end,
+        )
+        for offset in range(len(total_rows)):
+            row_index = y_start + offset
+            direct[row_index][x_start:x_end] = direct_rows[offset]
+            secondary[row_index][x_start:x_end] = secondary_rows[offset]
+            total[row_index][x_start:x_end] = total_rows[offset]
+            depth[row_index][x_start:x_end] = depth_rows[offset]
+            normal[row_index][x_start:x_end] = normal_rows[offset]
+            object_id[row_index][x_start:x_end] = object_id_rows[offset]
         if chunk_callback is not None:
-            chunk_callback(y, [total[y]])
+            chunk_callback(x_start, y_start, total_rows)
 
-        if y == 0 or (y + 1) % max(1, height // 20) == 0 or y == height - 1:
+        if completed_tiles == 1 or completed_tiles % max(1, total_tiles // 20) == 0 or completed_tiles == total_tiles:
             elapsed = time.time() - start
-            print(f"Rendered buffers {y + 1}/{height} rows in {elapsed:.1f} s")
+            print(f"Rendered buffers {completed_tiles}/{total_tiles} tiles in {elapsed:.1f} s")
             if progress_callback is not None:
-                progress_callback(y + 1, height, elapsed)
+                progress_callback(completed_tiles, total_tiles, elapsed)
 
     return RenderBuffers(direct, secondary, total, depth, normal, object_id)
 
 
-def render_buffer_row_range(
+def render_buffer_tile(
     scene: Scene,
     camera: Camera,
     width: int,
@@ -811,9 +823,12 @@ def render_buffer_row_range(
     max_depth: int,
     light_samples: int,
     seed: int,
+    x_start: int,
     y_start: int,
+    x_end: int,
     y_end: int,
 ) -> tuple[
+    int,
     int,
     list[list[Vec3]],
     list[list[Vec3]],
@@ -837,7 +852,7 @@ def render_buffer_row_range(
         normal_row = []
         object_id_row = []
 
-        for x in range(width):
+        for x in range(x_start, x_end):
             rng = random.Random(seed + y * width + x)
             direct_sum = BLACK
             secondary_sum = BLACK
@@ -867,7 +882,7 @@ def render_buffer_row_range(
         normal_rows.append(normal_row)
         object_id_rows.append(object_id_row)
 
-    return y_start, direct_rows, secondary_rows, total_rows, depth_rows, normal_rows, object_id_rows
+    return x_start, y_start, direct_rows, secondary_rows, total_rows, depth_rows, normal_rows, object_id_rows
 
 
 def gaussian_weight(value: float, sigma: float) -> float:
@@ -1169,7 +1184,7 @@ def save_lab45_metrics(path: str, buffers: RenderBuffers, filtered: list[list[Ve
         file.write("\n".join(lines))
 
 
-def render_row_range(
+def render_tile(
     scene: Scene,
     camera: Camera,
     width: int,
@@ -1178,13 +1193,15 @@ def render_row_range(
     max_depth: int,
     light_samples: int,
     seed: int,
+    x_start: int,
     y_start: int,
+    x_end: int,
     y_end: int,
-) -> tuple[int, list[list[Vec3]]]:
+) -> tuple[int, int, list[list[Vec3]]]:
     rows = []
     for y in range(y_start, y_end):
         row = []
-        for x in range(width):
+        for x in range(x_start, x_end):
             rng = random.Random(seed + y * width + x)
             color = BLACK
             for _ in range(samples_per_pixel):
@@ -1193,7 +1210,7 @@ def render_row_range(
                 color += trace_ray(camera.generate_ray(u, v), scene, rng, max_depth, light_samples)
             row.append(color / samples_per_pixel)
         rows.append(row)
-    return y_start, rows
+    return x_start, y_start, rows
 
 
 def render(
@@ -1212,16 +1229,21 @@ def render(
 ) -> list[list[Vec3]]:
     pixels = [[BLACK for _ in range(width)] for _ in range(height)]
     start = time.time()
+    tile_size = max(1, tile_size)
+    tiles = [
+        (x, y, min(width, x + tile_size), min(height, y + tile_size))
+        for y in range(0, height, tile_size)
+        for x in range(0, width, tile_size)
+    ]
+    total_tiles = len(tiles)
 
     if workers > 1:
-        completed_rows = 0
-        chunk_size = max(1, min(tile_size, height))
-        chunks = [(y, min(height, y + chunk_size)) for y in range(0, height, chunk_size)]
+        completed_tiles = 0
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(
-                    render_row_range,
+                    render_tile,
                     scene,
                     camera,
                     width,
@@ -1230,29 +1252,32 @@ def render(
                     max_depth,
                     light_samples,
                     seed,
+                    x_start,
                     y_start,
+                    x_end,
                     y_end,
                 )
-                for y_start, y_end in chunks
+                for x_start, y_start, x_end, y_end in tiles
             ]
 
             for future in as_completed(futures):
-                y_start, rows = future.result()
+                x_start, y_start, rows = future.result()
                 for offset, row in enumerate(rows):
-                    pixels[y_start + offset] = row
+                    y = y_start + offset
+                    pixels[y][x_start : x_start + len(row)] = row
 
-                completed_rows += len(rows)
+                completed_tiles += 1
                 elapsed = time.time() - start
-                print(f"Rendered {completed_rows}/{height} rows in {elapsed:.1f} s")
+                print(f"Rendered {completed_tiles}/{total_tiles} tiles in {elapsed:.1f} s")
                 if chunk_callback is not None:
-                    chunk_callback(y_start, rows)
+                    chunk_callback(x_start, y_start, rows)
                 if progress_callback is not None:
-                    progress_callback(completed_rows, height, elapsed)
+                    progress_callback(completed_tiles, total_tiles, elapsed)
 
         return pixels
 
-    for y in range(height):
-        _, rows = render_row_range(
+    for completed_tiles, (x_start, y_start, x_end, y_end) in enumerate(tiles, start=1):
+        _, _, rows = render_tile(
             scene,
             camera,
             width,
@@ -1261,18 +1286,22 @@ def render(
             max_depth,
             light_samples,
             seed,
-            y,
-            y + 1,
+            x_start,
+            y_start,
+            x_end,
+            y_end,
         )
-        pixels[y] = rows[0]
+        for offset, row in enumerate(rows):
+            y = y_start + offset
+            pixels[y][x_start : x_start + len(row)] = row
         if chunk_callback is not None:
-            chunk_callback(y, rows)
+            chunk_callback(x_start, y_start, rows)
 
-        if y == 0 or (y + 1) % max(1, height // 20) == 0 or y == height - 1:
+        if completed_tiles == 1 or completed_tiles % max(1, total_tiles // 20) == 0 or completed_tiles == total_tiles:
             elapsed = time.time() - start
-            print(f"Rendered {y + 1}/{height} rows in {elapsed:.1f} s")
+            print(f"Rendered {completed_tiles}/{total_tiles} tiles in {elapsed:.1f} s")
             if progress_callback is not None:
-                progress_callback(y + 1, height, elapsed)
+                progress_callback(completed_tiles, total_tiles, elapsed)
 
     return pixels
 
@@ -1750,11 +1779,11 @@ class Lab5App:
 
     def render_worker(self, args: argparse.Namespace) -> None:
         try:
-            def progress(row: int, total: int, elapsed: float) -> None:
-                self.events.put(("progress", row, total, elapsed))
+            def progress(done: int, total: int, elapsed: float) -> None:
+                self.events.put(("progress", done, total, elapsed))
 
-            def chunk(y_start: int, rows: list[list[Vec3]]) -> None:
-                self.events.put(("chunk", y_start, rows))
+            def chunk(x_start: int, y_start: int, rows: list[list[Vec3]]) -> None:
+                self.events.put(("chunk", x_start, y_start, rows))
 
             args.stage_callback = lambda text: self.events.put(("stage", text))
             ppm_path, png_path = render_from_args(args, progress, chunk)
@@ -1768,13 +1797,13 @@ class Lab5App:
                 event = self.events.get_nowait()
                 kind = event[0]
                 if kind == "progress":
-                    _, row, total, elapsed = event
-                    percent = 100.0 * row / total
+                    _, done, total, elapsed = event
+                    percent = 100.0 * done / total
                     self.progress["value"] = percent
-                    self.status_var.set(f"Готово {row}/{total} строк ({percent:.1f}%), {elapsed:.1f} c")
+                    self.status_var.set(f"Готово {done}/{total} тайлов ({percent:.1f}%), {elapsed:.1f} c")
                 elif kind == "chunk":
-                    _, y_start, rows = event
-                    self.apply_live_chunk(y_start, rows)
+                    _, x_start, y_start, rows = event
+                    self.apply_live_chunk(x_start, y_start, rows)
                 elif kind == "stage":
                     _, text = event
                     self.status_var.set(text)
@@ -1810,7 +1839,7 @@ class Lab5App:
         self.last_preview_update = 0.0
         self.refresh_live_preview(force=True)
 
-    def apply_live_chunk(self, y_start: int, rows: list[list[Vec3]]) -> None:
+    def apply_live_chunk(self, x_start: int, y_start: int, rows: list[list[Vec3]]) -> None:
         if self.live_image is None or self.live_args is None:
             return
 
@@ -1821,9 +1850,9 @@ class Lab5App:
                 gamma_correct(color, self.live_args.exposure, self.live_args.gamma)
                 for color in row
             ]
-            row_image = Image.new("RGB", (self.live_args.width, 1))
+            row_image = Image.new("RGB", (len(pixels), 1))
             row_image.putdata(pixels)
-            self.live_image.paste(row_image, (0, y_start + offset))
+            self.live_image.paste(row_image, (x_start, y_start + offset))
 
         self.refresh_live_preview(force=False)
 
