@@ -1,9 +1,30 @@
 *
 !.gitignore
 !README.md
-!lab1.py
-!lab2.py
-!лаб1мои.docx
-!лаб1мои.pdf
-!лаб2мои.docx
-!лаб2мои.pdf
+!lab1/
+!lab1/**
+!lab2/
+!lab2/**
+!lab3/
+!lab3/**
+!lab4/
+!lab4/**
+!lab4-5/
+!lab4-5/**
+
+.DS_Store
+**/.DS_Store
+**/__pycache__/
+**/*.pyc
+**/~$*
+**/*.ppm
+**/* copy.docx
+**/lab2_reference_pages/
+**/lab2.pdf
+**/lab_03_report.pdf
+**/КОС_ЛР3.xlsx
+**/МОИ_*
+**/Отчет_третья_лабораторная_МОИ.docx
+**/11 Low-Pass Filters*.pdf
+**/Отчет_ЛР4.docx
+**/лаб4мои.docx
