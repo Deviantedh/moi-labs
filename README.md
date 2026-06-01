@@ -27,3 +27,5 @@
 ## Лабораторная 5
 - Код: [lab4-5/lab4_5.py](./lab4-5/lab4_5.py)
 - Сцены: [lab4-5/scenes.py](./lab4-5/scenes.py)
+- Отчет DOCX: [lab4-5/лаб5мои.docx](./lab4-5/лаб5мои.docx)
+- Отчет PDF: [lab4-5/лаб5мои.pdf](./lab4-5/лаб5мои.pdf)
